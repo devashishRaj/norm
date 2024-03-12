@@ -1,0 +1,39 @@
+version: '3'
+services:
+  metrics_db:
+    image: clickhouse/clickhouse-server:latest
+    container_name: metrics
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - "127.0.0.1:19123:8123"
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - ${SCHEMA_PATH}:/docker-entrypoint-initdb.d/init-db.sql
+      - ${DATABASE_PATH}:/var/lib/clickhouse/
+      - ${CLICKHOUSE_LOG}:/var/log/clickhouse-server/
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: on-failure:5
+  nomad_grafana:
+    image: grafana/grafana:main
+    container_name: nomad_grfana
+    restart: on-failure:5
+    ports:
+      - "3123:3000"
+    depends_on:
+      - metrics_db
+    environment:
+      GF_DATABASE_USER: ${GF_DATABASE_USER}
+      GF_DATABASE_PASSWORD: ${GF_DATABASE_PASSWORD}
+      GF_INSTALL_PLUGINS: ${GF_INSTALL_PLUGINS}
+    volumes:
+      - ${GRAFANA_VOLUME}:/var/lib/grafana
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/" ] # Adjust the URL if needed
+      interval: 30s
+      timeout: 10s
+      retries: 5
