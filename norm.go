@@ -9,7 +9,6 @@ import (
 	"github.com/devashishRaj/norm/metricStruct"
 	"github.com/hashicorp/nomad/api"
 	"log"
-	"os"
 	"sync"
 	"time"
 )
@@ -214,7 +213,7 @@ func BulkSend(bulkdata []metricStruct.ClickHouseSchema, conn chDriver.Conn) {
 
 }
 
-func dataToFile(body []byte) {
+/*func dataToFile(body []byte) {
 
 	file, err := os.Create("data.json")
 	if err != nil {
@@ -233,4 +232,4 @@ func dataToFile(body []byte) {
 		return
 	}
 	fmt.Println("JSON data successfully written to file.")
-}
+}*/
