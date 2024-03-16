@@ -20,12 +20,12 @@ job "pytechco-employee" {
 
       template {
         data        = <<EOH
-{{ range nomadService "redis-svc" }}
-REDIS_HOST={{ .Address }}
-REDIS_PORT={{ .Port }}
-PTC_EMPLOYEE_ID={{ env "NOMAD_SHORT_ALLOC_ID"}}
-{{ end }}
-EOH
+			{{ range nomadService "redis-svc" }}
+			REDIS_HOST={{ .Address }}
+			REDIS_PORT={{ .Port }}
+			PTC_EMPLOYEE_ID={{ env "NOMAD_SHORT_ALLOC_ID"}}
+			{{ end }}
+		EOH
         destination = "local/env.txt"
         env         = true
       }

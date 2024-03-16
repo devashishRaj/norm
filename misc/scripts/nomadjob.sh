@@ -9,7 +9,7 @@ nomad job run pytechco-web.nomad.hcl
 sleep 2
 nomad job run pytechco-setup.nomad.hcl
 sleep 2
-nomad job dispatch -meta budget="200000" pytechco-setup
+nomad job dispatch -meta budget="20000" pytechco-setup
 sleep 2
 nomad job run pytechco-employee.nomad.hcl
 sleep 2
