@@ -8,9 +8,7 @@ import (
 	"github.com/devashishRaj/norm/CH_conn"
 	"github.com/devashishRaj/norm/metricStruct"
 	"github.com/hashicorp/nomad/api"
-	"log"
-	"os"
-	"sync"
+	"golang.org/x/sync/errgroup"
 	"time"
 )
 
@@ -19,57 +17,31 @@ type WorkerParams struct {
 	FetchedData metricStruct.NomadMetrics
 	ChConn      chDriver.Conn
 }
-
-// FetchMetrics : fetch nomad metrics in pretty format and returns a json file
-// as per metricStruct.NomadMetrics struct
-func FetchMetrics() metricStruct.NomadMetrics {
-
-	cfg := api.DefaultConfig()
-	cfg.Address = "http://127.0.0.1:4646"
-	c, err := api.NewClient(cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
-	op := c.Operator()
-	qo := &api.QueryOptions{
-		Params: map[string]string{
-			"pretty": "1",
-		},
-	}
-	metrics, err := op.Metrics(qo)
-	if err != nil {
-		panic(err)
-	}
-	if metrics == nil {
-		panic(err)
-	}
-	//dataToFile(metrics)
-	var nomadmetrics metricStruct.NomadMetrics
-	err = json.Unmarshal(metrics, &nomadmetrics)
-	if err != nil {
-		fmt.Println("Error unmarshalling JSON:", err)
-		return metricStruct.NomadMetrics{}
-	}
-	return nomadmetrics
-
+type ErrorStringPair struct {
+	str string
+	err error
 }
 
 // NomadmetricsBulksend : collects metrics at interval of one second
 // and after 10th collection it sends them into clickhouse
-func NomadmetricsBulksend() int {
+func NomadmetricsBulksend() error {
 	conn, err := CH_conn.ConnectCH()
 	if err != nil {
 		fmt.Println(err)
-		return 1
+		return err
 	}
 	bulkDataChannel := make(chan []metricStruct.ClickHouseSchema)
-	var wg sync.WaitGroup
+	eg := errgroup.Group{}
 	count := 0
 	// inside go routine to make other parts reachable
-	wg.Add(1)
-	go func() {
+
+	eg.Go(func() error {
 		for {
-			metrics := FetchMetrics()
+			fmt.Println(count)
+			metrics, err := FetchMetrics()
+			if err != nil {
+				return err
+			}
 			params := WorkerParams{
 				AppendData:  bulkDataChannel,
 				FetchedData: metrics,
@@ -81,28 +53,75 @@ func NomadmetricsBulksend() int {
 			time.Sleep(1 * time.Second)
 			// once metrics has been collected 10 times , they are send
 			if count == 10 {
-				fmt.Println("In collection")
-				var bulkBatch []metricStruct.ClickHouseSchema
-				// // creates a single slice by joining all 10 slices
-				for ; count > 0; count-- {
-					fmt.Println(count)
-					singleBatch := <-bulkDataChannel
-					bulkBatch = append(bulkBatch, singleBatch...)
-				}
-				BulkSend(bulkBatch, conn)
-				fmt.Println("Bulk sent")
+				eg.Go(func() error {
+					err := sendTelemetry(bulkDataChannel, conn)
+					return err
+				})
+				count = 0
 			}
 
 		}
-	}()
-	wg.Wait()
-	return 0
+
+	})
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func sendTelemetry(bulkDataChannel chan []metricStruct.ClickHouseSchema, conn chDriver.Conn) error {
+
+	var bulkBatch []metricStruct.ClickHouseSchema
+	// creates a single slice by joining all 10 slices
+	for count := 10; count > 0; count-- {
+		singleBatch := <-bulkDataChannel
+		bulkBatch = append(bulkBatch, singleBatch...)
+	}
+	err := BulkSend(bulkBatch, conn)
+	if err != nil {
+		return err
+	}
+	fmt.Println("sent")
+	return nil
+}
+
+// FetchMetrics : fetch nomad metrics in pretty format and returns a json file
+// as per metricStruct.NomadMetrics struct
+func FetchMetrics() (metricStruct.NomadMetrics, error) {
+
+	cfg := api.DefaultConfig()
+	cfg.Address = "http://127.0.0.1:4646"
+	c, err := api.NewClient(cfg)
+	if err != nil {
+		return metricStruct.NomadMetrics{}, err
+	}
+	op := c.Operator()
+	qo := &api.QueryOptions{
+		Params: map[string]string{
+			"pretty": "1",
+		},
+	}
+	metrics, err := op.Metrics(qo)
+	if err != nil {
+		return metricStruct.NomadMetrics{}, err
+	}
+	if metrics == nil {
+		return metricStruct.NomadMetrics{}, err
+	}
+	//dataToFile(metrics)
+	var nomadmetrics metricStruct.NomadMetrics
+	err = json.Unmarshal(metrics, &nomadmetrics)
+	if err != nil {
+		fmt.Println("Error unmarshalling JSON:", err)
+		return metricStruct.NomadMetrics{}, err
+	}
+	return nomadmetrics, nil
+
 }
 
 // BatchBuild : it creates a slice of a struct metricStruct.ClickHouseSchema
 // using metrics collected from FetchMetrics()
 func BatchBuild(params WorkerParams) {
-	fmt.Println("Creating build batch")
 	var bulkBatch []metricStruct.ClickHouseSchema
 	for _, counter := range params.FetchedData.Counters {
 		bulkBatch = append(bulkBatch, metricStruct.ClickHouseSchema{
@@ -177,20 +196,15 @@ func BatchBuild(params WorkerParams) {
 		})
 	}
 	params.AppendData <- bulkBatch
-	fmt.Println("Build done")
-	//defer params.WaitGroup.Done()
-
 }
 
 // BulkSend :  insert slice of metricStruct.ClickHouseSchema
-func BulkSend(bulkdata []metricStruct.ClickHouseSchema, conn chDriver.Conn) {
-	fmt.Println("In bulk Send")
-
+func BulkSend(bulkdata []metricStruct.ClickHouseSchema, conn chDriver.Conn) error {
 	ctx := context.Background()
 	batch, err := conn.PrepareBatch(ctx, "INSERT INTO nomad.metrics")
 	if err != nil {
 		fmt.Println(err)
-		return
+		return err
 	}
 	for _, data := range bulkdata {
 		err = batch.AppendStruct(&metricStruct.ClickHouseSchema{
@@ -203,18 +217,18 @@ func BulkSend(bulkdata []metricStruct.ClickHouseSchema, conn chDriver.Conn) {
 			Labels:     data.Labels,
 		})
 		if err != nil {
-			panic(err)
+			return err
 		}
 	}
-	fmt.Println("Sending....")
 	err = batch.Send()
 	if err != nil {
-		panic(err)
+		return err
 	}
+	return nil
 
 }
 
-func dataToFile(body []byte) {
+/*func dataToFile(body []byte) {
 
 	file, err := os.Create("data.json")
 	if err != nil {
@@ -233,4 +247,4 @@ func dataToFile(body []byte) {
 		return
 	}
 	fmt.Println("JSON data successfully written to file.")
-}
+}*/

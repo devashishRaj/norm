@@ -2,9 +2,12 @@ package main
 
 import (
 	"github.com/devashishRaj/norm"
-	"os"
+	"log"
 )
 
 func main() {
-	os.Exit(norm.NomadmetricsBulksend())
+	err := norm.NomadmetricsBulksend()
+	if err != nil {
+		log.Fatal(err)
+	}
 }

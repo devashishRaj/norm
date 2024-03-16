@@ -5,6 +5,7 @@ go 1.22.1
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.21.1
 	github.com/hashicorp/nomad/api v0.0.0-20240312112441-428103ba1265
+	golang.org/x/sync v0.6.0
 )
 
 require (
