@@ -1,4 +1,5 @@
 data.json
 misc/docker_vol/
 .env
+misc/scipts/
 .DS_Store
