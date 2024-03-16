@@ -3,5 +3,5 @@ misc/docker_vol/chDB/
 misc/docker_vol/chLOG/
 misc/docker_vol/grafana/
 .env
-misc/scipts/
 .DS_Store
+misc/scripts/
