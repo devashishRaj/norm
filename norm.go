@@ -14,13 +14,12 @@ import (
 
 type WorkerParams struct {
 	AppendData  chan<- []metricStruct.ClickHouseSchema
-	FetchedData metricStruct.NomadMetrics
+	FetchedData *metricStruct.NomadMetrics
 	ChConn      chDriver.Conn
 }
-type ErrorStringPair struct {
-	str string
-	err error
-}
+
+// bulk insert all metrics collected in last 10 secs
+var telemetryInsertInterval time.Duration = 10
 
 // NomadmetricsBulksend : collects metrics at interval of one second
 // and after 10th collection it sends them into clickhouse
@@ -32,52 +31,63 @@ func NomadmetricsBulksend() error {
 	}
 	bulkDataChannel := make(chan []metricStruct.ClickHouseSchema)
 	eg := errgroup.Group{}
-	count := 0
-	// inside go routine to make other parts reachable
 
+	// inside go routine to make other parts reachable
+	perSecTicker := time.NewTicker(1 * time.Second)
+	tenSecTicker := time.NewTicker(telemetryInsertInterval * time.Second)
+	defer tenSecTicker.Stop()
+	defer perSecTicker.Stop()
 	eg.Go(func() error {
 		for {
-			fmt.Println(count)
-			metrics, err := FetchMetrics()
-			if err != nil {
-				return err
-			}
-			params := WorkerParams{
-				AppendData:  bulkDataChannel,
-				FetchedData: metrics,
-				ChConn:      conn,
-			}
-			go BatchBuild(params)
-			count++
-			// collect metrics at interval of 1 second and send them in channel
-			time.Sleep(1 * time.Second)
-			// once metrics has been collected 10 times , they are send
-			if count == 10 {
-				eg.Go(func() error {
-					err := sendTelemetry(bulkDataChannel, conn)
+			select {
+			case <-perSecTicker.C:
+				err = buildTelemetryBatch(bulkDataChannel, conn)
+				if err != nil {
 					return err
-				})
-				count = 0
+				}
+				//count++
+			case <-tenSecTicker.C:
+				// once metrics has been collected 10 times , they are send
+				//batch := count
+				//fmt.Println(count)
+				//count = 0
+				err = sendTelemetry(bulkDataChannel, conn)
+				if err != nil {
+					return err
+				}
 			}
-
 		}
-
 	})
+	fmt.Println("reachable")
 	if err := eg.Wait(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func sendTelemetry(bulkDataChannel chan []metricStruct.ClickHouseSchema, conn chDriver.Conn) error {
+func buildTelemetryBatch(bulkDataChannel chan []metricStruct.ClickHouseSchema, conn chDriver.Conn) error {
+	metrics, err := FetchMetrics()
+	if err != nil {
+		return err
+	}
+	params := WorkerParams{
+		AppendData:  bulkDataChannel,
+		FetchedData: &metrics,
+		ChConn:      conn,
+	}
+	go BatchBuild(params)
+	return nil
+}
 
+func sendTelemetry(bulkDataChannel chan []metricStruct.ClickHouseSchema, conn chDriver.Conn) error {
 	var bulkBatch []metricStruct.ClickHouseSchema
 	// creates a single slice by joining all 10 slices
-	for count := 10; count > 0; count-- {
+	batch := telemetryInsertInterval
+	for ; batch > 0; batch-- {
 		singleBatch := <-bulkDataChannel
 		bulkBatch = append(bulkBatch, singleBatch...)
 	}
-	err := BulkSend(bulkBatch, conn)
+	err := BulkSend(&bulkBatch, conn)
 	if err != nil {
 		return err
 	}
@@ -199,14 +209,14 @@ func BatchBuild(params WorkerParams) {
 }
 
 // BulkSend :  insert slice of metricStruct.ClickHouseSchema
-func BulkSend(bulkdata []metricStruct.ClickHouseSchema, conn chDriver.Conn) error {
+func BulkSend(bulkdata *[]metricStruct.ClickHouseSchema, conn chDriver.Conn) error {
 	ctx := context.Background()
 	batch, err := conn.PrepareBatch(ctx, "INSERT INTO nomad.metrics")
 	if err != nil {
 		fmt.Println(err)
 		return err
 	}
-	for _, data := range bulkdata {
+	for _, data := range *bulkdata {
 		err = batch.AppendStruct(&metricStruct.ClickHouseSchema{
 			Source:     data.Source,
 			MetricType: data.MetricType,
